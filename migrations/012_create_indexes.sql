@@ -1,0 +1,11 @@
+CREATE INDEX IF NOT EXISTS idx_users_email            ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_role             ON users(role);
+CREATE INDEX IF NOT EXISTS idx_students_roll          ON students(roll_number);
+CREATE INDEX IF NOT EXISTS idx_students_program       ON students(program_id);
+CREATE INDEX IF NOT EXISTS idx_faculty_emp_id         ON faculty(employee_id);
+CREATE INDEX IF NOT EXISTS idx_courses_program        ON courses(program_id);
+CREATE INDEX IF NOT EXISTS idx_offerings_semester     ON course_offerings(semester_id);
+CREATE INDEX IF NOT EXISTS idx_offerings_faculty      ON course_offerings(faculty_id);
+CREATE INDEX IF NOT EXISTS idx_registrations_student  ON registrations(student_id);
+CREATE INDEX IF NOT EXISTS idx_registrations_offering ON registrations(course_offering_id);
+CREATE INDEX IF NOT EXISTS idx_grades_registration    ON grades(registration_id);
