@@ -21,6 +21,7 @@ type AdminController struct {
 	semesterRepo *repositories.SemesterRepository
 	courseRepo   *repositories.CourseRepository
 	emailRepo    *repositories.EmailSettingsRepository
+	userRepo     *repositories.UserRepository
 	adminSvc     *services.AdminService
 	emailSvc     *services.EmailService
 }
@@ -37,7 +38,8 @@ func NewAdminController(
 	as *services.AdminService,
 	es *services.EmailService,
 ) *AdminController {
-	return &AdminController{ar, sr, fr, dr, pr, semr, cr, er, as, es}
+	return &AdminController{ar, sr, fr, dr, pr, semr, cr, er,
+		repositories.NewUserRepository(), as, es}
 }
 
 // ── Dashboard ──────────────────────────────────────────────────────────────
@@ -95,8 +97,12 @@ func (ctrl *AdminController) CreateStudent(c *gin.Context) {
 		utils.Fail(c, 400, "invalid request body")
 		return
 	}
-	if strings.TrimSpace(input.RollNumber) == "" || strings.TrimSpace(input.Email) == "" {
-		utils.Fail(c, 400, "roll number and email are required")
+	if strings.TrimSpace(input.RollNumber) == "" {
+		utils.Fail(c, 400, "roll number is required")
+		return
+	}
+	if strings.TrimSpace(input.Email) == "" {
+		utils.Fail(c, 400, "email is required")
 		return
 	}
 
@@ -109,22 +115,89 @@ func (ctrl *AdminController) CreateStudent(c *gin.Context) {
 	utils.Created(c, profile)
 }
 
+// UpdateStudent updates student profile fields AND optionally email/password.
 func (ctrl *AdminController) UpdateStudent(c *gin.Context) {
 	id := parseID(c, "id")
 	if id == 0 {
 		return
 	}
-	var s models.Student
-	if err := c.ShouldBindJSON(&s); err != nil {
+
+	var body struct {
+		RollNumber      string  `json:"roll_number"`
+		FirstName       string  `json:"first_name"`
+		LastName        string  `json:"last_name"`
+		Phone           string  `json:"phone"`
+		DateOfBirth     *string `json:"date_of_birth"`
+		Gender          string  `json:"gender"`
+		Address         string  `json:"address"`
+		ProgramID       int64   `json:"program_id"`
+		AdmissionYear   int     `json:"admission_year"`
+		CurrentSemester int     `json:"current_semester"`
+		IsActive        bool    `json:"is_active"`
+		Email           string  `json:"email"`
+		Password        string  `json:"password"` // empty = no change
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
 		utils.Fail(c, 400, "invalid request body")
 		return
 	}
-	if err := ctrl.studentRepo.Update(id, &s); err != nil {
+
+	// Update student-profile fields
+	s := &models.Student{
+		RollNumber:      body.RollNumber,
+		FirstName:       body.FirstName,
+		LastName:        body.LastName,
+		Phone:           body.Phone,
+		DateOfBirth:     body.DateOfBirth,
+		Gender:          body.Gender,
+		Address:         body.Address,
+		ProgramID:       body.ProgramID,
+		AdmissionYear:   body.AdmissionYear,
+		CurrentSemester: body.CurrentSemester,
+		IsActive:        body.IsActive,
+	}
+	if err := ctrl.studentRepo.Update(id, s); err != nil {
 		utils.Fail(c, 500, "failed to update student")
 		return
 	}
-	profile, _ := ctrl.studentRepo.FindByID(id)
-	utils.OK(c, profile)
+
+	// Get the updated profile to find user_id
+	profile, err := ctrl.studentRepo.FindByID(id)
+	if err != nil || profile == nil {
+		utils.Fail(c, 404, "student not found after update")
+		return
+	}
+
+	// Update email in users table if provided and changed
+	if body.Email != "" && body.Email != profile.Email {
+		// Check email not taken by another user
+		existing, _ := ctrl.userRepo.FindByEmail(body.Email)
+		if existing != nil && existing.ID != profile.UserID {
+			utils.Fail(c, 400, "email already in use by another account")
+			return
+		}
+		if err := ctrl.userRepo.UpdateEmail(profile.UserID, body.Email); err != nil {
+			utils.Fail(c, 500, "failed to update email")
+			return
+		}
+	}
+
+	// Update password if a new one was provided
+	if body.Password != "" {
+		hash, err := services.HashPassword(body.Password)
+		if err != nil {
+			utils.Fail(c, 500, "failed to hash password")
+			return
+		}
+		if err := ctrl.userRepo.UpdatePassword(profile.UserID, hash); err != nil {
+			utils.Fail(c, 500, "failed to update password")
+			return
+		}
+	}
+
+	// Return fresh profile
+	updated, _ := ctrl.studentRepo.FindByID(id)
+	utils.OKMsg(c, "Student updated successfully", updated)
 }
 
 // ── Faculty ────────────────────────────────────────────────────────────────
@@ -170,22 +243,77 @@ func (ctrl *AdminController) CreateFaculty(c *gin.Context) {
 	utils.Created(c, profile)
 }
 
+// UpdateFaculty updates faculty profile AND optionally email/password.
 func (ctrl *AdminController) UpdateFaculty(c *gin.Context) {
 	id := parseID(c, "id")
 	if id == 0 {
 		return
 	}
-	var f models.Faculty
-	if err := c.ShouldBindJSON(&f); err != nil {
+
+	var body struct {
+		EmployeeID   string `json:"employee_id"`
+		FirstName    string `json:"first_name"`
+		LastName     string `json:"last_name"`
+		Phone        string `json:"phone"`
+		DepartmentID *int64 `json:"department_id"`
+		Designation  string `json:"designation"`
+		IsActive     bool   `json:"is_active"`
+		Email        string `json:"email"`
+		Password     string `json:"password"` // empty = no change
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
 		utils.Fail(c, 400, "invalid request body")
 		return
 	}
-	if err := ctrl.facultyRepo.Update(id, &f); err != nil {
+
+	f := &models.Faculty{
+		EmployeeID:   body.EmployeeID,
+		FirstName:    body.FirstName,
+		LastName:     body.LastName,
+		Phone:        body.Phone,
+		DepartmentID: body.DepartmentID,
+		Designation:  body.Designation,
+		IsActive:     body.IsActive,
+	}
+	if err := ctrl.facultyRepo.Update(id, f); err != nil {
 		utils.Fail(c, 500, "failed to update faculty")
 		return
 	}
-	profile, _ := ctrl.facultyRepo.FindByID(id)
-	utils.OK(c, profile)
+
+	profile, err := ctrl.facultyRepo.FindByID(id)
+	if err != nil || profile == nil {
+		utils.Fail(c, 404, "faculty not found after update")
+		return
+	}
+
+	// Update email
+	if body.Email != "" && body.Email != profile.Email {
+		existing, _ := ctrl.userRepo.FindByEmail(body.Email)
+		if existing != nil && existing.ID != profile.UserID {
+			utils.Fail(c, 400, "email already in use by another account")
+			return
+		}
+		if err := ctrl.userRepo.UpdateEmail(profile.UserID, body.Email); err != nil {
+			utils.Fail(c, 500, "failed to update email")
+			return
+		}
+	}
+
+	// Update password
+	if body.Password != "" {
+		hash, err := services.HashPassword(body.Password)
+		if err != nil {
+			utils.Fail(c, 500, "failed to hash password")
+			return
+		}
+		if err := ctrl.userRepo.UpdatePassword(profile.UserID, hash); err != nil {
+			utils.Fail(c, 500, "failed to update password")
+			return
+		}
+	}
+
+	updated, _ := ctrl.facultyRepo.FindByID(id)
+	utils.OKMsg(c, "Faculty updated successfully", updated)
 }
 
 // ── Departments ────────────────────────────────────────────────────────────
@@ -246,7 +374,7 @@ func (ctrl *AdminController) UpdateProgram(c *gin.Context) {
 		return
 	}
 	updated, _ := ctrl.programRepo.FindByID(id)
-	utils.OK(c, updated)
+	utils.OKMsg(c, "Program updated successfully", updated)
 }
 
 // ── Semesters ──────────────────────────────────────────────────────────────
@@ -293,7 +421,7 @@ func (ctrl *AdminController) UpdateSemester(c *gin.Context) {
 		return
 	}
 	updated, _ := ctrl.semesterRepo.FindByID(id)
-	utils.OK(c, updated)
+	utils.OKMsg(c, "Semester updated successfully", updated)
 }
 
 // ── Courses ────────────────────────────────────────────────────────────────
@@ -320,12 +448,16 @@ func (ctrl *AdminController) CreateCourse(c *gin.Context) {
 		utils.Fail(c, 400, "invalid request body")
 		return
 	}
+	// Default credits if not provided
+	if course.Credits == 0 {
+		course.Credits = 3
+	}
 	id, err := ctrl.courseRepo.Create(&course)
 	if err != nil {
 		utils.Fail(c, 500, "failed to create course")
 		return
 	}
-	utils.Created(c, gin.H{"id": id})
+	utils.Created(c, gin.H{"id": id, "message": "Course created successfully"})
 }
 
 func (ctrl *AdminController) UpdateCourse(c *gin.Context) {
@@ -338,11 +470,14 @@ func (ctrl *AdminController) UpdateCourse(c *gin.Context) {
 		utils.Fail(c, 400, "invalid request body")
 		return
 	}
+	if course.Credits == 0 {
+		course.Credits = 3
+	}
 	if err := ctrl.courseRepo.Update(id, &course); err != nil {
 		utils.Fail(c, 500, "failed to update course")
 		return
 	}
-	utils.OKMsg(c, "course updated", gin.H{"id": id})
+	utils.OKMsg(c, "Course updated successfully", gin.H{"id": id})
 }
 
 // ── Course Offerings ───────────────────────────────────────────────────────
@@ -396,7 +531,7 @@ func (ctrl *AdminController) UpdateCourseOffering(c *gin.Context) {
 		return
 	}
 	updated, _ := ctrl.courseRepo.GetOfferingByID(id)
-	utils.OK(c, updated)
+	utils.OKMsg(c, "Course offering updated successfully", updated)
 }
 
 // ── Email Settings ─────────────────────────────────────────────────────────
@@ -407,21 +542,15 @@ func (ctrl *AdminController) GetEmailSettings(c *gin.Context) {
 		utils.Fail(c, 500, "failed to fetch email settings")
 		return
 	}
-	// Mask the password before returning
 	masked := "••••••••••••"
 	if settings.SmtpPassword == "" {
 		masked = ""
 	}
 	resp := models.EmailSettingsResponse{
-		ID:           settings.ID,
-		SmtpHost:     settings.SmtpHost,
-		SmtpPort:     settings.SmtpPort,
-		SmtpUsername: settings.SmtpUsername,
-		SmtpPassword: masked,
-		FromEmail:    settings.FromEmail,
-		FromName:     settings.FromName,
-		IsEnabled:    settings.IsEnabled,
-		UpdatedAt:    settings.UpdatedAt,
+		ID: settings.ID, SmtpHost: settings.SmtpHost, SmtpPort: settings.SmtpPort,
+		SmtpUsername: settings.SmtpUsername, SmtpPassword: masked,
+		FromEmail: settings.FromEmail, FromName: settings.FromName,
+		IsEnabled: settings.IsEnabled, UpdatedAt: settings.UpdatedAt,
 	}
 	utils.OK(c, resp)
 }
@@ -431,7 +560,7 @@ func (ctrl *AdminController) UpdateEmailSettings(c *gin.Context) {
 		SmtpHost     string `json:"smtp_host"`
 		SmtpPort     int    `json:"smtp_port"`
 		SmtpUsername string `json:"smtp_username"`
-		SmtpPassword string `json:"smtp_password"` // empty = keep existing
+		SmtpPassword string `json:"smtp_password"`
 		FromEmail    string `json:"from_email"`
 		FromName     string `json:"from_name"`
 		IsEnabled    bool   `json:"is_enabled"`
@@ -440,33 +569,24 @@ func (ctrl *AdminController) UpdateEmailSettings(c *gin.Context) {
 		utils.Fail(c, 400, "invalid request body")
 		return
 	}
-
-	// Load existing to get ID
 	existing, err := ctrl.emailRepo.Get()
 	if err != nil {
 		utils.Fail(c, 500, "failed to load email settings")
 		return
 	}
-
 	updated := &models.EmailSettings{
-		ID:           existing.ID,
-		SmtpHost:     body.SmtpHost,
-		SmtpPort:     body.SmtpPort,
-		SmtpUsername: body.SmtpUsername,
-		FromEmail:    body.FromEmail,
-		FromName:     body.FromName,
-		IsEnabled:    body.IsEnabled,
+		ID: existing.ID, SmtpHost: body.SmtpHost, SmtpPort: body.SmtpPort,
+		SmtpUsername: body.SmtpUsername, FromEmail: body.FromEmail,
+		FromName: body.FromName, IsEnabled: body.IsEnabled,
 	}
-	// Only update password if a real new value was sent (not the masked placeholder)
 	if body.SmtpPassword != "" && body.SmtpPassword != "••••••••••••" {
 		updated.SmtpPassword = body.SmtpPassword
 	}
-
 	if err := ctrl.emailRepo.Update(updated); err != nil {
 		utils.Fail(c, 500, "failed to update email settings")
 		return
 	}
-	utils.OKMsg(c, "email settings updated", nil)
+	utils.OKMsg(c, "Email settings saved successfully", nil)
 }
 
 func (ctrl *AdminController) TestEmail(c *gin.Context) {
@@ -481,10 +601,9 @@ func (ctrl *AdminController) TestEmail(c *gin.Context) {
 		utils.Fail(c, 500, "test email failed: "+err.Error())
 		return
 	}
-	utils.OKMsg(c, "test email sent to "+body.To, nil)
+	utils.OKMsg(c, "Test email sent to "+body.To, nil)
 }
 
-// parseID reads a URL path parameter as int64.
 func parseID(c *gin.Context, param string) int64 {
 	id, err := strconv.ParseInt(c.Param(param), 10, 64)
 	if err != nil || id <= 0 {

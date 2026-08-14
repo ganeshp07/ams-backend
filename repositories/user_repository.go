@@ -18,10 +18,7 @@ func (r *UserRepository) FindByEmail(email string) (*models.User, error) {
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	return &u, nil
+	return &u, err
 }
 
 func (r *UserRepository) FindByID(id int64) (*models.User, error) {
@@ -33,10 +30,7 @@ func (r *UserRepository) FindByID(id int64) (*models.User, error) {
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	return &u, nil
+	return &u, err
 }
 
 func (r *UserRepository) CreateWithTx(tx *sql.Tx, email, hash, role string) (int64, error) {
@@ -52,4 +46,22 @@ func (r *UserRepository) EmailExists(email string) (bool, error) {
 	var count int
 	err := DB.QueryRow(`SELECT COUNT(*) FROM users WHERE email = $1`, email).Scan(&count)
 	return count > 0, err
+}
+
+// UpdateEmail changes a user's login email address.
+func (r *UserRepository) UpdateEmail(userID int64, email string) error {
+	_, err := DB.Exec(`UPDATE users SET email=$1, updated_at=NOW() WHERE id=$2`, email, userID)
+	return err
+}
+
+// UpdatePassword stores a new bcrypt hash for a user.
+func (r *UserRepository) UpdatePassword(userID int64, hash string) error {
+	_, err := DB.Exec(`UPDATE users SET password_hash=$1, updated_at=NOW() WHERE id=$2`, hash, userID)
+	return err
+}
+
+// UpdateActiveStatus activates or deactivates a user account.
+func (r *UserRepository) UpdateActiveStatus(userID int64, active bool) error {
+	_, err := DB.Exec(`UPDATE users SET is_active=$1, updated_at=NOW() WHERE id=$2`, active, userID)
+	return err
 }
