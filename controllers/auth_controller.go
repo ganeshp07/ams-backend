@@ -7,7 +7,6 @@ import (
 	"ams-backend/utils"
 	"strings"
 
-	"golang.org/x/crypto/bcrypt"
 	"github.com/gin-gonic/gin"
 )
 
@@ -26,7 +25,7 @@ func (ctrl *AuthController) Login(c *gin.Context) {
 		Password string `json:"password"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		utils.Fail(c, 400, "Please provide email and password")
+		utils.Fail(c, 400, "email and password are required")
 		return
 	}
 	body.Email    = strings.TrimSpace(body.Email)
@@ -45,7 +44,7 @@ func (ctrl *AuthController) Login(c *gin.Context) {
 		return
 	}
 	if !result.User.IsActive {
-		utils.Fail(c, 400, "Your account has been deactivated. Contact the administrator.")
+		utils.Fail(c, 400, "Your account has been deactivated. Please contact the administrator.")
 		return
 	}
 	utils.OK(c, result)
@@ -61,48 +60,25 @@ func (ctrl *AuthController) Me(c *gin.Context) {
 	utils.OK(c, user)
 }
 
-// ChangePassword — lets any logged-in user change their own password.
+// ChangePassword lets any authenticated user update their own password.
 func (ctrl *AuthController) ChangePassword(c *gin.Context) {
 	userID := middleware.GetUserID(c)
-
 	var body struct {
 		CurrentPassword string `json:"current_password"`
 		NewPassword     string `json:"new_password"`
+		ConfirmPassword string `json:"confirm_password"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		utils.Fail(c, 400, "Invalid request body")
 		return
 	}
-	if strings.TrimSpace(body.CurrentPassword) == "" {
-		utils.Fail(c, 400, "Current password is required")
+	if body.NewPassword != body.ConfirmPassword {
+		utils.Fail(c, 400, "New passwords do not match")
 		return
 	}
-	if len(strings.TrimSpace(body.NewPassword)) < 4 {
-		utils.Fail(c, 400, "New password must be at least 4 characters")
+	if err := ctrl.authSvc.ChangePassword(userID, body.CurrentPassword, body.NewPassword); err != nil {
+		utils.Fail(c, 400, err.Error())
 		return
 	}
-
-	user, err := ctrl.userRepo.FindByID(userID)
-	if err != nil || user == nil {
-		utils.Fail(c, 404, "User not found")
-		return
-	}
-
-	// Verify the current password
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(body.CurrentPassword)); err != nil {
-		utils.Fail(c, 400, "Current password is incorrect")
-		return
-	}
-
-	hash, err := services.HashPassword(body.NewPassword)
-	if err != nil {
-		utils.Fail(c, 500, "Failed to hash new password")
-		return
-	}
-	if err := ctrl.userRepo.UpdatePassword(userID, hash); err != nil {
-		utils.Fail(c, 500, "Failed to update password")
-		return
-	}
-
 	utils.OKMsg(c, "Password changed successfully", nil)
 }

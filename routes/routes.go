@@ -13,16 +13,16 @@ import (
 )
 
 func SetupRouter(db *sql.DB) *gin.Engine {
-	userRepo      := repositories.NewUserRepository()
-	studentRepo   := repositories.NewStudentRepository()
-	facultyRepo   := repositories.NewFacultyRepository()
-	deptRepo      := repositories.NewDepartmentRepository()
-	programRepo   := repositories.NewProgramRepository()
-	semesterRepo  := repositories.NewSemesterRepository()
-	courseRepo    := repositories.NewCourseRepository()
-	gradeRepo     := repositories.NewGradeRepository()
-	emailRepo     := repositories.NewEmailSettingsRepository()
-	adminRepo     := repositories.NewAdminRepository()
+	userRepo     := repositories.NewUserRepository()
+	studentRepo  := repositories.NewStudentRepository()
+	facultyRepo  := repositories.NewFacultyRepository()
+	deptRepo     := repositories.NewDepartmentRepository()
+	programRepo  := repositories.NewProgramRepository()
+	semesterRepo := repositories.NewSemesterRepository()
+	courseRepo   := repositories.NewCourseRepository()
+	gradeRepo    := repositories.NewGradeRepository()
+	emailRepo    := repositories.NewEmailSettingsRepository()
+	adminRepo    := repositories.NewAdminRepository()
 
 	authSvc  := services.NewAuthService(userRepo)
 	emailSvc := services.NewEmailService(emailRepo)
@@ -50,10 +50,12 @@ func SetupRouter(db *sql.DB) *gin.Engine {
 	api.POST("/auth/login", authCtrl.Login)
 
 	// Any authenticated user
-	api.GET("/auth/me", middleware.Auth(), authCtrl.Me)
+	authed := api.Group("", middleware.Auth())
+	authed.GET("/auth/me", authCtrl.Me)
+	authed.PUT("/auth/change-password", authCtrl.ChangePassword) // all roles
 
-	// Admin routes — middleware applied directly on the group
-	admin := api.Group("/admin", middleware.Auth(), middleware.RequireRole("admin"))
+	// Admin routes
+	admin := authed.Group("/admin", middleware.RequireRole("admin"))
 	admin.GET("/dashboard", adminCtrl.GetDashboard)
 
 	admin.GET("/students",     adminCtrl.ListStudents)
@@ -89,23 +91,23 @@ func SetupRouter(db *sql.DB) *gin.Engine {
 	admin.POST("/settings/email/test", adminCtrl.TestEmail)
 
 	// Faculty routes
-	faculty := api.Group("/faculty", middleware.Auth(), middleware.RequireRole("faculty"))
-	faculty.GET("/me",      facultyCtrl.GetProfile)
+	faculty := authed.Group("/faculty", middleware.RequireRole("faculty"))
+	faculty.GET("/me",     facultyCtrl.GetProfile)
 	faculty.GET("/courses", facultyCtrl.GetCurrentCourses)
 	faculty.GET("/courses/history", facultyCtrl.GetCourseHistory)
-	faculty.GET("/courses/:courseOfferingId/students",    facultyCtrl.GetCourseStudents)
-	faculty.POST("/courses/:courseOfferingId/grades",     facultyCtrl.UploadGrade)
-	faculty.PUT("/courses/:courseOfferingId/grades/:sid", facultyCtrl.UploadGrade)
+	faculty.GET("/courses/:courseOfferingId/students",     facultyCtrl.GetCourseStudents)
+	faculty.POST("/courses/:courseOfferingId/grades",      facultyCtrl.UploadGrade)
+	faculty.PUT("/courses/:courseOfferingId/grades/:sid",  facultyCtrl.UploadGrade)
 	faculty.POST("/courses/:courseOfferingId/grades/bulk", facultyCtrl.BulkUploadGrades)
 
 	// Student routes
-	student := api.Group("", middleware.Auth(), middleware.RequireRole("student"))
-	student.GET("/students/me",         studentCtrl.GetProfile)
-	student.GET("/students/me/courses", studentCtrl.GetCourses)
-	student.GET("/students/me/grades",  studentCtrl.GetGrades)
-	student.GET("/semesters/active",    studentCtrl.GetActiveSemester)
-	student.GET("/courses/available",   studentCtrl.GetAvailableCourses)
-	student.POST("/courses/register",   studentCtrl.RegisterCourse)
+	student := authed.Group("", middleware.RequireRole("student"))
+	student.GET("/students/me",          studentCtrl.GetProfile)
+	student.GET("/students/me/courses",  studentCtrl.GetCourses)
+	student.GET("/students/me/grades",   studentCtrl.GetGrades)
+	student.GET("/semesters/active",     studentCtrl.GetActiveSemester)
+	student.GET("/courses/available",    studentCtrl.GetAvailableCourses)
+	student.POST("/courses/register",    studentCtrl.RegisterCourse)
 
 	return r
 }
